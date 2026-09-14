@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Registro - GymPlat</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📝</text></svg>">
+</head>
+<body>
+  <div id="navbar-root"></div>
+  <div id="page-content"></div>
+
+  <script type="module">
+    import { Navbar } from '../js/components/Navbar.js';
+    import { FormBuilder } from '../js/components/Form.js';
+    import { Modal } from '../js/components/Modal.js';
+    import { Toast } from '../js/components/Toast.js';
+    import { ENUMS } from '../js/utils/config.js';
+    import { gymService, trainerService } from '../js/services/firestore.js';
+    import { registerUser, loginUser, getCurrentUser, onAuthStateChanged } from '../js/services/auth.js';
+
+    const toast = new Toast();
+    const modal = new Modal();
+
+
+    const navbar = new Navbar({
+      onLoginClick: () => { window.location.href = '../index.html'; },
+      onRegisterClick: () => { window.location.href = '../index.html'; },
+    });
+    document.getElementById('navbar-root').appendChild(navbar.render());
+    onAuthStateChanged((user) => navbar.setUser(user));
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const defaultTab = urlParams.get('tab') || 'gym';
+
+    const content = document.getElementById('page-content');
+
+    content.innerHTML = `
+      <div class="page-header">
+        <h1>📝 Regístrate en GymPlat</h1>
+        <p>Elige cómo quieres unirte a la plataforma</p>
+      </div>
+      <div class="container" style="max-width:640px;">
+        <div class="tabs">
+          <button class="tab-btn ${defaultTab==='gym'?'active':''}" data-tab="crear-gym">🏢 Crear Gimnasio</button>
+          <button class="tab-btn ${defaultTab==='trainer'?'active':''}" data-tab="unirme">💪 Unirme como Entrenador</button>
+        </div>
+
+        <div id="tab-crear-gym" class="tab-content ${defaultTab==='gym'?'active':''}">
+          <div class="card">
+            <div id="gym-form-area"></div>
+          </div>
+        </div>
+
+        <div id="tab-unirme" class="tab-content ${defaultTab==='trainer'?'active':''}">
+          <div class="card">
+            <div id="trainer-form-area"></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Tab switching
+    content.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        content.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        content.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+        btn.classList.add('active');
+        const tabId = btn.dataset.tab === 'crear-gym' ? 'tab-crear-gym' : 'tab-unirme';
+        content.querySelector(`#${tabId}`).classList.add('active');
+      });
+    });
+
+    const especialidades = ENUMS.ESPECIALIDADES;
+
+    // === CREAR GIMNASIO FORM ===
+    function renderGymForm() {
+      const area = document.getElementById('gym-form-area');
+      const form = FormBuilder.create([
+        { name:'nombre', type:'text', label:'Nombre del Gimnasio', required:true, placeholder:'Ej: Power Gym Madrid' },
+        { name:'descripcion', type:'textarea', label:'Descripción', required:true, placeholder:'Describe tu gimnasio', rows:3 },
+        { name:'direccion', type:'text', label:'Dirección', required:true },
+        { name:'telefono', type:'tel', label:'Teléfono', required:true },
+        { name:'email', type:'email', label:'Email', required:true },
+        { name:'ciudad', type:'text', label:'Ciudad', required:true },
+        { name:'especialidades', type:'text', label:'Especialidades', helpText:'Separadas por coma: CrossFit, Fuerza, Yoga' },
+        { name:'precioMensual', type:'number', label:'Precio Mensial ($)', required:true, min:0, step:0.01 },
+        { name:'logoFile', type:'file', label:'Logo', accept:'image/*' },
+        { name:'bannerFile', type:'file', label:'Banner', accept:'image/*' },
+      ]);
+      area.appendChild(form.render());
+
+      // Chips especialidades
+      const chipArea = document.createElement('div');
+      chipArea.style.cssText = 'margin-bottom:12px;';
+      chipArea.innerHTML = `
+        <label style="display:block;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Especialidades (selecciona)</label>
+        <div class="chip-group" id="especialidad-chips"></div>
+      `;
+      area.insertBefore(chipArea, form.getElement());
+
+      especialidades.forEach(spec => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = spec;
+        chip.dataset.value = spec;
+        chip.addEventListener('click', () => chip.classList.toggle('selected'));
+        chipArea.querySelector('#especialidad-chips').appendChild(chip);
+      });
+
+      // Horarios
+      const horariosArea = document.createElement('div');
+      horariosArea.innerHTML = `<label style="display:block;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Horarios de Apertura</label>`;
+      const horariosContainer = document.createElement('div');
+      horariosContainer.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-bottom:12px;';
+      const dias = ENUMS.DIAS_SEMANA;
+      dias.forEach(dia => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;';
+        row.innerHTML = `<span style="min-width:80px;font-weight:600;font-size:14px;">${dia}</span>`;
+        const inTime = document.createElement('input');
+        inTime.type = 'time'; inTime.name = `horario_${dia}_inicio`;
+        inTime.style.cssText = 'flex:1;min-width:100px;padding:8px 12px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);';
+        const outTime = document.createElement('input');
+        outTime.type = 'time'; outTime.name = `horario_${dia}_fin`;
+        outTime.style.cssText = 'flex:1;min-width:100px;padding:8px 12px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);';
+        row.appendChild(inTime);
+        row.appendChild(outTime);
+        horariosContainer.appendChild(row);
+      });
+      horariosArea.appendChild(horariosContainer);
+      area.insertBefore(horariosArea, form.getElement());
+
+      // Submit button
+      const submitBtn = document.createElement('button');
+      submitBtn.textContent = '🏢 Crear Gimnasio';
+      submitBtn.className = 'btn btn-primary btn-lg btn-block mt-2';
+      submitBtn.addEventListener('click', async () => {
+        if (!form.validateAll()) return;
+        const vals = form.getValues();
+        const selectedSpecs = [];
+        chipArea.querySelectorAll('.chip.selected').forEach(c => selectedSpecs.push(c.dataset.value));
+
+        const horarios = [];
+        dias.forEach(dia => {
+          const inicio = document.querySelector(`[name="horario_${dia}_inicio"]`);
+          const fin = document.querySelector(`[name="horario_${dia}_fin"]`);
+          if (inicio?.value && fin?.value) {
+            horarios.push({ dia, horaApertura: inicio.value, horaCierre: fin.value });
+          }
+        });
+
+        try {
+          await gymService.create({
+            nombre: vals.nombre, descripcion: vals.descripcion, direccion: vals.direccion,
+            telefono: vals.telefono, email: vals.email, ciudad: vals.ciudad,
+            estado: 'activo', especialidades: selectedSpecs, precioMensual: parseFloat(vals.precioMensual),
+            horarios, logo: '', banner: '', fotos: [], memberCount: 0,
+            ownerId: getCurrentUser()?.id || 'demo',
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+          });
+          toast.success('¡Gimnasio creado!');
+          setTimeout(() => window.location.href = 'admin-gym.html', 1500);
+        } catch(e) {
+          toast.error(e.message || 'Error creando gimnasio');
+        }
+      });
+      area.appendChild(submitBtn);
+    }
+
+    // === UNIRME COMO ENTRENADOR FORM ===
+    function renderTrainerForm() {
+      const area = document.getElementById('trainer-form-area');
+
+      // Load gyms for dropdown
+      let gymsList = [];
+      try { gymsList = gymService.getAll(); } catch(e) {}
+
+      const form = FormBuilder.create([
+        { name:'gymId', type:'select', label:'Seleccionar Gimnasio', required:true, options: [{value:'',label:'Cargando...'}] },
+        { name:'nombre', type:'text', label:'Nombre Completo', required:true },
+        { name:'email', type:'email', label:'Email', required:true },
+        { name:'telefono', type:'tel', label:'Teléfono' },
+        { name:'especialidad', type:'text', label:'Especialidad Principal', required:true },
+        { name:'aniosExperiencia', type:'number', label:'Años de Experiencia', min:0 },
+        { name:'certificaciones', type:'text', label:'Certificaciones (separadas por coma)' },
+        { name:'tarifaHora', type:'number', label:'Tarifa por Hora ($)', min:0, step:1 },
+        { name:'fotoFile', type:'file', label:'Foto Perfil', accept:'image/*' },
+        { name:'bio', type:'textarea', label:'Biografía', rows:4 },
+        { name:'password', type:'password', label:'Contraseña', required:true, helpText:'Mínimo 6 caracteres' },
+      ]);
+      area.appendChild(form.render());
+
+      // Populate gyms dropdown
+      async function populateGyms() {
+        try {
+          gymsList = await gymsList;
+          const select = form.getElement().querySelector('[name="gymId"]');
+          if (select) {
+            select.innerHTML = '<option value="">-- Selecciona un gimnasio --</option>';
+            gymsList.filter(g => g.estado === 'activo').forEach(g => {
+              const opt = document.createElement('option');
+              opt.value = g.id; opt.textContent = g.nombre;
+              select.appendChild(opt);
+            });
+          }
+        } catch(e) {}
+      }
+      populateGyms();
+
+      const submitBtn = document.createElement('button');
+      submitBtn.textContent = '💪 Unirme como Entrenador';
+      submitBtn.className = 'btn btn-primary btn-lg btn-block mt-2';
+      submitBtn.addEventListener('click', async () => {
+        if (!form.validateAll()) return;
+        const vals = form.getValues();
+        const certs = vals.certificaciones ? vals.certificaciones.split(',').map(s=>s.trim()).filter(Boolean) : [];
+
+        try {
+          // Register user
+          await registerUser({ email: vals.email, password: vals.password, displayName: vals.nombre, role: 'trainer' });
+
+          // Create trainer
+          await trainerService.create({
+            gymId: vals.gymId, nombre: vals.nombre, email: vals.email,
+            telefono: vals.telefono, especialidad: vals.especialidad,
+            aniosExperiencia: parseInt(vals.aniosExperiencia)||0,
+            certificaciones: certs, tarifaHora: parseFloat(vals.tarifaHora)||0,
+            bio: vals.bio, estado: 'activo',
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+          });
+
+          toast.success('¡Registro exitoso!');
+          setTimeout(() => window.location.href = 'trainer.html', 1500);
+        } catch(e) {
+          toast.error(e.message || 'Error en registro');
+        }
+      });
+      area.appendChild(submitBtn);
+    }
+
+    renderGymForm();
+    renderTrainerForm();
+  </script>
+</body>
+</html>

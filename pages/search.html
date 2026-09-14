@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Buscar Gimnasios - GymPlat</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+</head>
+<body>
+  <div id="navbar-root"></div>
+  <div id="page-content"></div>
+
+  <script type="module">
+    import { Navbar } from '../js/components/Navbar.js';
+    import { GymCard } from '../js/components/GymCard.js';
+    import { Toast } from '../js/components/Toast.js';
+    import { searchGyms, getFeaturedGyms } from '../js/services/gymService.js';
+    import { onAuthStateChanged } from '../js/services/auth.js';
+
+    const toast = new Toast();
+
+    const navbar = new Navbar({ onSearch: (t) => window.location.href = `search.html?q=${encodeURIComponent(t)}` });
+    document.getElementById('navbar-root').appendChild(navbar.render());
+    onAuthStateChanged((user) => navbar.setUser(user));
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const query = urlParams.get('q') || '';
+
+    const content = document.getElementById('page-content');
+
+    content.innerHTML = `
+      <div class="page-header">
+        <h1>🔍 Buscar Gimnasios</h1>
+        <p>Encuentra el gimnasio perfecto para ti</p>
+      </div>
+      <div class="container">
+        <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;">
+          <!-- Sidebar Filters -->
+          <aside style="width:260px;flex-shrink:0;" class="card">
+            <h3 style="margin-bottom:16px;">Filtros</h3>
+            <div style="display:flex;flex-direction:column;gap:16px;">
+              <div>
+                <label>Ciudad</label>
+                <input type="text" class="input" id="filter-city" placeholder="Ej: Madrid">
+              </div>
+              <div>
+                <label>Especialidad</label>
+                <select class="input" id="filter-specialty">
+                  <option value="">Todas</option>
+                </select>
+              </div>
+              <div>
+                <label>Precio Mínimo ($)</label>
+                <input type="number" class="input" id="filter-min" min="0" step="1">
+              </div>
+              <div>
+                <label>Precio Máximo ($)</label>
+                <input type="number" class="input" id="filter-max" min="0" step="1">
+              </div>
+              <div>
+                <label>Rating Mínimo</label>
+                <select class="input" id="filter-rating">
+                  <option value="0">Cualquier</option>
+                  <option value="3">3+ ★</option>
+                  <option value="4">4+ ★</option>
+                  <option value="4.5">4.5+ ★</option>
+                </select>
+              </div>
+              <div>
+                <label>Ordenar por</label>
+                <select class="input" id="filter-order">
+                  <option value="">Más recientes</option>
+                  <option value="rating">Más valorados</option>
+                  <option value="precio-asc">Precio (bajo-alto)</option>
+                  <option value="precio-desc">Precio (alto-bajo)</option>
+                </select>
+              </div>
+              <button class="btn btn-primary btn-block" onclick="applyFilters()">Aplicar Filtros</button>
+              <button class="btn btn-ghost btn-block" onclick="resetFilters()">Restablecer</button>
+            </div>
+          </aside>
+
+          <!-- Results -->
+          <main style="flex:1;min-width:0;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+              <h2 id="results-count">Resultados</h2>
+              <span class="badge badge-blue" id="results-badge">0</span>
+            </div>
+            <div class="grid-3" id="results-grid"></div>
+            <div id="loading" class="text-center mt-3 hidden"><div class="spinner"></div></div>
+          </main>
+        </div>
+      </div>
+    `;
+
+    // Populate specialty filter
+    const specSelect = content.querySelector('#filter-specialty');
+    import('../js/utils/config.js').then(({ ENUMS }) => {
+      ENUMS.ESPECIALIDADES.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s; opt.textContent = s;
+        specSelect.appendChild(opt);
+      });
+    });
+
+    async function loadResults() {
+      const grid = content.querySelector('#results-grid');
+      const countEl = content.querySelector('#results-count');
+      const badgeEl = content.querySelector('#results-badge');
+      const loadingEl = content.querySelector('#loading');
+
+      loadingEl.classList.remove('hidden');
+      grid.innerHTML = '';
+
+      try {
+        const filters = {
+          ciudad: content.querySelector('#filter-city').value || undefined,
+          especialidad: content.querySelector('#filter-specialty').value || undefined,
+          termino: query || undefined,
+        };
+        const order = content.querySelector('#filter-order').value || undefined;
+        if (order) filters.orden = order;
+
+        const results = await searchGyms(filters);
+
+        // Apply price and rating filters client-side if not in API
+        const minPrice = parseFloat(content.querySelector('#filter-min').value) || 0;
+        const maxPrice = parseFloat(content.querySelector('#filter-max').value) || Infinity;
+        const minRating = parseFloat(content.querySelector('#filter-rating').value) || 0;
+
+        const filtered = results.filter(g => {
+          if ((g.precioMensual || 0) < minPrice) return false;
+          if ((g.precioMensual || 0) > maxPrice) return false;
+          if ((g.rating || 0) < minRating) return false;
+          return true;
+        });
+
+        loadingEl.classList.add('hidden');
+        countEl.textContent = `Resultados (${filtered.length})`;
+        badgeEl.textContent = filtered.length;
+
+        if (filtered.length === 0) {
+          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="icon">🔍</div><p>No se encontraron gimnasios</p></div>';
+          return;
+        }
+
+        filtered.forEach(gym => {
+          grid.appendChild(GymCard.render(gym));
+        });
+      } catch(e) {
+        loadingEl.classList.add('hidden');
+        grid.innerHTML = '<div class="empty-state"><p>Error buscando gimnasios</p></div>';
+        console.error(e);
+      }
+    }
+
+    window.applyFilters = loadResults;
+
+    window.resetFilters = function() {
+      content.querySelector('#filter-city').value = '';
+      content.querySelector('#filter-specialty').value = '';
+      content.querySelector('#filter-min').value = '';
+      content.querySelector('#filter-max').value = '';
+      content.querySelector('#filter-rating').value = '0';
+      content.querySelector('#filter-order').value = '';
+      loadResults();
+    };
+
+    // Load initial
+    loadResults();
+  </script>
+</body>
+</html>

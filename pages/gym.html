@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Perfil del Gimnasio - GymPlat</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏋️</text></svg>">
+</head>
+<body>
+  <div id="navbar-root"></div>
+  <div id="page-content"></div>
+
+  <script type="module">
+    import { Navbar } from '../js/components/Navbar.js';
+    import { GymCard } from '../js/components/GymCard.js';
+    import { TrainerCard } from '../js/components/TrainerCard.js';
+    import { ReviewCard } from '../js/components/ReviewCard.js';
+    import { RatingStars } from '../js/components/RatingStars.js';
+    import { Modal } from '../js/components/Modal.js';
+    import { Toast } from '../js/components/Toast.js';
+    import { MapEmbed } from '../js/components/MapEmbed.js';
+    import { FormBuilder } from '../js/components/Form.js';
+    import { COLLECTIONS } from '../js/utils/config.js';
+    import { gymService, trainerService, reviewService } from '../js/services/firestore.js';
+    import { getCurrentUser, onAuthStateChanged } from '../js/services/auth.js';
+
+    const toast = new Toast();
+    const modal = new Modal();
+
+    // Navbar
+    const navbar = new Navbar({
+      onSearch: (t) => { window.location.href = `search.html?q=${encodeURIComponent(t)}`; },
+    });
+    document.getElementById('navbar-root').appendChild(navbar.render());
+    onAuthStateChanged((user) => navbar.setUser(user));
+
+    // Load gym data
+    const urlParams = new URLSearchParams(window.location.search);
+    const gymId = urlParams.get('id');
+    let currentGym = null;
+
+    async function loadGymProfile() {
+      const content = document.getElementById('page-content');
+
+      try {
+        currentGym = gymId
+          ? await gymService.getById(gymId)
+          : null;
+
+        if (!currentGym) {
+          // Demo fallback
+          currentGym = {
+            id: 'demo', nombre: 'Power Gym Demo', descripcion: 'Gimnasio de referencia con instalaciones completas.',
+            direccion:'Av. Castellana 123, Madrid', telefono:'+34 911 234 567', email:'info@powergym.es',
+            ciudad:'Madrid', estado:'activo', logo:'', banner:'', precioMensual:49.99, rating:4.8,
+            especialidades:['CrossFit','Fuerza','Yoga','Musculación'],
+            horarios:[{dia:'Lunes',horaApertura:'06:00',horaCierre:'23:00'},{dia:'Martes',horaApertura:'06:00',horaCierre:'23:00'}],
+            fotos:[], createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), ownerId:'demo', memberCount:450,
+          };
+        }
+
+        // Banner
+        content.innerHTML = `
+          ${currentGym.banner ? `<div style="height:300px;overflow:hidden;"><img src="${currentGym.banner}" style="width:100%;object-fit:cover;" alt="Banner"></div>` : '<div style="height:200px;background:var(--gradient-sports);"></div>'}
+          <div class="container mt-3">
+            <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap;">
+              <div style="width:120px;height:120px;border-radius:16px;overflow:hidden;border:3px solid var(--border-color);flex-shrink:0;background:var(--bg-secondary);">
+                ${currentGym.logo ? `<img src="${currentGym.logo}" style="width:100%;height:100%;object-fit:cover;" alt="Logo">` : '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:48px;opacity:0.3;">🏋️</div>'}
+              </div>
+              <div style="flex:1;min-width:200px;">
+                <h1 style="margin-bottom:4px;">${escapeHtml(currentGym.nombre)}</h1>
+                <p style="color:var(--text-secondary);">${escapeHtml(currentGym.ciudad)} · ${currentGym.rating ? `<span style="color:#f59e0b;">★ ${currentGym.rating}</span>` : ''} · ${currentGym.memberCount || 0} miembros</p>
+                <p style="color:var(--text-secondary);margin-top:8px;">${escapeHtml(currentGym.descripcion)}</p>
+                <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;">
+                  <button class="btn btn-primary" onclick="openContactModal()">📞 Reservar Visita</button>
+                  <button class="btn btn-outline" onclick="toast.info('Contacto: ${escapeHtml(currentGym.email||'info@gym')}')">✉️ Contactar</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Info bar -->
+            <div class="grid-4 mt-3" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
+              <div class="card" style="text-align:center;"><p style="font-size:24px;">📍</p><p style="font-size:14px;color:var(--text-secondary);">${escapeHtml(currentGym.direccion)}</p></div>
+              <div class="card" style="text-align:center;"><p style="font-size:24px;">📞</p><p style="font-size:14px;color:var(--text-secondary);">${escapeHtml(currentGym.telefono)}</p></div>
+              <div class="card" style="text-align:center;"><p style="font-size:24px;">💰</p><p style="font-size:14px;color:var(--text-secondary);">Desde $${currentGym.precioMensual}/mes</p></div>
+              <div class="card" style="text-align:center;"><p style="font-size:24px;">⏰</p><p style="font-size:14px;color:var(--text-secondary);">Ver horarios</p></div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="tabs mt-3">
+              <button class="tab-btn active" data-tab="entrenadores">👤 Entrenadores</button>
+              <button class="tab-btn" data-tab="instalaciones">🏢 Instalaciones</button>
+              <button class="tab-btn" data-tab="reseñas">⭐ Reseñas</button>
+              <button class="tab-btn" data-tab="precios">💰 Precios</button>
+            </div>
+
+            <div id="tab-entrenadores" class="tab-content active">
+              <div class="grid-3" id="trainers-grid"></div>
+            </div>
+            <div id="tab-instalaciones" class="tab-content">
+              <div class="grid-4" id="gallery-grid"></div>
+            </div>
+            <div id="tab-reseñas" class="tab-content">
+              <div id="reviews-list"></div>
+            </div>
+            <div id="tab-precios" class="tab-content">
+              <div id="pricing-content"></div>
+            </div>
+          </div>
+        `;
+
+        // Tab switching
+        content.querySelectorAll('.tab-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            content.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            content.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+            btn.classList.add('active');
+            const tabId = btn.dataset.tab;
+            content.querySelector(`#tab-${tabId}`).classList.add('active');
+          });
+        });
+
+        // Load trainers
+        loadTrainers();
+        // Load gallery
+        loadGallery();
+        // Load reviews
+        loadReviews();
+        // Load pricing
+        loadPricing();
+        // Map
+        renderMap();
+
+      } catch(e) {
+        content.innerHTML = `<div class="container mt-3"><div class="empty-state"><p>Error cargando gimnasio</p></div></div>`;
+        console.error(e);
+      }
+    }
+
+    function escapeHtml(t) { if (!t) return ''; const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
+    async function loadTrainers() {
+      const grid = document.getElementById('trainers-grid');
+      if (!grid) return;
+      try {
+        let trainers = [];
+        try { trainers = await trainerService.getByGym(currentGym.id); } catch(e) {}
+        if (trainers.length === 0) {
+          grid.innerHTML = '<div class="empty-state"><div class="icon">👤</div><p>No hay entrenadores registrados</p></div>';
+          return;
+        }
+        trainers.forEach(t => {
+          t.gymNombre = currentGym.nombre;
+          grid.appendChild(TrainerCard.render(t));
+        });
+      } catch(e) {
+        grid.innerHTML = '<div class="empty-state"><p>Error cargando entrenadores</p></div>';
+      }
+    }
+
+    function loadGallery() {
+      const grid = document.getElementById('gallery-grid');
+      if (!grid) return;
+      const photos = currentGym.fotos || [];
+      if (photos.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><div class="icon">📷</div><p>No hay fotos disponibles</p></div>';
+        return;
+      }
+      photos.forEach(url => {
+        const img = document.createElement('img');
+        img.src = url;
+        img.style.cssText = 'width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;cursor:pointer;transition:transform 0.2s;';
+        img.onmouseenter = () => img.style.transform = 'scale(1.03)';
+        img.onmouseleave = () => img.style.transform = 'scale(1)';
+        grid.appendChild(img);
+      });
+    }
+
+    async function loadReviews() {
+      const list = document.getElementById('reviews-list');
+      if (!list) return;
+      try {
+        let reviews = [];
+        try { reviews = await reviewService.getByGym(currentGym.id); } catch(e) {}
+        reviews = reviews.filter(r => r.approved);
+
+        const formArea = document.createElement('div');
+        formArea.className = 'card mb-3';
+        formArea.innerHTML = `
+          <h3 style="margin-bottom:12px;">Deja tu reseña</h3>
+          <div id="review-form-area"></div>
+        `;
+        list.appendChild(formArea);
+
+        reviews.forEach(r => {
+          list.appendChild(ReviewCard.render(r));
+        });
+
+        // Add review form
+        const formAreaEl = formArea.querySelector('#review-form-area');
+        const currentUser = getCurrentUser();
+        if (currentUser) {
+          const form = FormBuilder.create([
+            { name:'rating', type:'select', label:'Calificación', required:true, options:[
+              {value:0,label:'Seleccionar...'},{value:1,label:'1 - Muy malo'},{value:2,label:'2 - Malo'},{value:3,label:'3 - Regular'},{value:4,label:'4 - Bueno'},{value:5,label:'5 - Excelente'},
+            ]},
+            { name:'contenido', type:'textarea', label:'Tu opinión', required:true, placeholder:'Cuéntanos tu experiencia...', rows:4 },
+          ]);
+          formAreaEl.appendChild(form.render());
+
+          const btn = document.createElement('button');
+          btn.textContent = 'Enviar Reseña';
+          btn.className = 'btn btn-primary mt-2';
+          btn.onclick = async () => {
+            if (!form.validateAll()) return;
+            const vals = form.getValues();
+            try {
+              await reviewService.create({
+                gymId: currentGym.id, autorNombre: (currentUser.displayName || currentUser.email || 'Usuario'),
+                autorEmail: currentUser.email, contenido: vals.contenido,
+                rating: parseInt(vals.rating), media: [], approved: true, createdAt: new Date().toISOString(),
+              });
+              toast.success('¡Reseña enviada!');
+              loadReviews();
+            } catch(e) { toast.error(e.message); }
+          };
+          formAreaEl.appendChild(btn);
+        } else {
+          formAreaEl.innerHTML = '<p style="color:var(--text-secondary);">Inicia sesión para dejar una reseña.</p>';
+        }
+      } catch(e) {
+        list.innerHTML = '<div class="empty-state"><p>No hay reseñas aún</p></div>';
+      }
+    }
+
+    function loadPricing() {
+      const el = document.getElementById('pricing-content');
+      if (!el) return;
+      const plans = [
+        { nombre:'Mensual', precio: currentGym.precioMensual || 49.99, desc:'Pago mensual, sin compromiso', popular:false },
+        { nombre:'Trimestral', precio: (currentGym.precioMensual || 49.99) * 3 * 0.9, desc:'3 meses con 10% descuento', popular:true },
+        { nombre:'Anual', precio: (currentGym.precioMensual || 49.99) * 12 * 0.75, desc:'12 meses con 25% descuento', popular:false },
+      ];
+      el.innerHTML = '<div class="grid-3">' + plans.map(p => `
+        <div class="card ${p.popular?'card-hover':''}" style="${p.popular?'border:2px solid var(--accent-orange);':''}">
+          ${p.popular?'<span class="badge badge-blue" style="position:absolute;top:12px;right:12px;">Popular</span>':''}
+          <h3 style="margin-bottom:4px;">${p.nombre}</h3>
+          <p style="font-size:32px;font-weight:800;background:var(--gradient-sports);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">$${p.precio.toFixed(2)}</p>
+          <p style="color:var(--text-secondary);font-size:14px;margin:8px 0 16px;">${p.desc}</p>
+          <button class="btn btn-primary btn-block">Suscribirse</button>
+        </div>
+      `).join('') + '</div>';
+    }
+
+    function renderMap() {
+      const mapDiv = document.createElement('div');
+      mapDiv.style.cssText = 'margin:24px 0;';
+      mapDiv.innerHTML = '<h3 style="margin-bottom:12px;">📍 Ubicación</h3>';
+      const map = new MapEmbed({ type:'google', apiKey:'', center:'40.4168,-3.7038', address:currentGym.direccion, height:'300px' });
+      mapDiv.appendChild(map.render());
+      document.querySelector('.container').insertBefore(mapDiv, document.querySelector('.tabs'));
+    }
+
+    function openContactModal() {
+      const form = FormBuilder.create([
+        { name:'nombre', type:'text', label:'Nombre', required:true, placeholder:'Tu nombre' },
+        { name:'email', type:'email', label:'Email', required:true, placeholder:'tu@email.com' },
+        { name:'telefono', type:'tel', label:'Teléfono', placeholder:'+34 ...' },
+        { name:'mensaje', type:'textarea', label:'Mensaje', required:true, placeholder:'¿Qué te gustaría saber?', rows:3 },
+      ]);
+
+      modal.open({
+        title: 'Reservar Visita',
+        content: form.render(),
+        actions: [
+          { label: 'Cancelar', className: 'btn btn-ghost', onClick: () => modal.close() },
+          { label: 'Enviar', className: 'btn btn-primary', onClick: () => {
+            if (!form.validateAll()) return;
+            toast.success('¡Solicitud enviada! Te contactaremos pronto.');
+            modal.close();
+          }},
+        ],
+      });
+    }
+
+    window.openContactModal = openContactModal;
+    window.toast = toast;
+
+    loadGymProfile();
+  </script>
+</body>
+</html>

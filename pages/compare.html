@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comparar Gimnasios - GymPlat</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📊</text></svg>">
+</head>
+<body>
+  <div id="navbar-root"></div>
+  <div id="page-content"></div>
+
+  <script type="module">
+    import { Navbar } from '../js/components/Navbar.js';
+    import { Toast } from '../js/components/Toast.js';
+    import { gymService } from '../js/services/firestore.js';
+    import { compareGyms } from '../js/services/gymService.js';
+    import { onAuthStateChanged } from '../js/services/auth.js';
+
+    const toast = new Toast();
+
+    const navbar = new Navbar({ onSearch: (t) => window.location.href = `search.html?q=${encodeURIComponent(t)}` });
+    document.getElementById('navbar-root').appendChild(navbar.render());
+    onAuthStateChanged((user) => navbar.setUser(user));
+
+    const content = document.getElementById('page-content');
+
+    content.innerHTML = `
+      <div class="page-header">
+        <h1>📊 Comparar Gimnasios</h1>
+        <p>Selecciona hasta 3 gimnasios para compararlos</p>
+      </div>
+      <div class="container">
+        <div class="card mb-3">
+          <h3 style="margin-bottom:12px;">Seleccionar Gimnasios</h3>
+          <div id="gym-selector" class="flex flex-wrap gap-2"></div>
+          <div class="mt-3">
+            <button class="btn btn-primary" onclick="startComparison()">📊 Comparar Seleccionados</button>
+          </div>
+          <p class="text-muted mt-1" style="font-size:13px;">Selecciona entre 2 y 3 gimnasios</p>
+        </div>
+        <div id="comparison-result" class="hidden">
+          <div id="comparison-table"></div>
+        </div>
+      </div>
+    `;
+
+    let selectedGyms = [];
+
+    async function loadGymSelector() {
+      const container = content.querySelector('#gym-selector');
+      try {
+        const gyms = await gymService.getAll();
+        gyms.filter(g => g.estado === 'activo').forEach(g => {
+          const btn = document.createElement('button');
+          btn.className = 'chip';
+          btn.textContent = g.nombre;
+          btn.addEventListener('click', () => {
+            const idx = selectedGyms.findIndex(s => s.id === g.id);
+            if (idx >= 0) {
+              selectedGyms.splice(idx, 1);
+              btn.classList.remove('selected');
+            } else if (selectedGyms.length < 3) {
+              selectedGyms.push(g);
+              btn.classList.add('selected');
+            } else {
+              toast.warning('Máximo 3 gimnasios');
+            }
+          });
+          container.appendChild(btn);
+        });
+      } catch(e) {
+        container.innerHTML = '<p style="color:var(--text-secondary);">No hay gimnasios disponibles</p>';
+      }
+    }
+
+    window.startComparison = async function() {
+      if (selectedGyms.length < 2) {
+        toast.warning('Selecciona al menos 2 gimnasios');
+        return;
+      }
+      content.querySelector('#comparison-result').classList.remove('hidden');
+      const tableContainer = content.querySelector('#comparison-table');
+      tableContainer.innerHTML = '<div class="spinner"></div>';
+
+      try {
+        const gyms = await compareGyms(selectedGyms.map(g => g.id));
+        renderComparison(gyms);
+      } catch(e) {
+        tableContainer.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`;
+      }
+    };
+
+    function renderComparison(gyms) {
+      const tableContainer = content.querySelector('#comparison-table');
+
+      // Build comparison cards
+      let html = '<div class="grid-3">';
+      gyms.forEach(g => {
+        html += `
+          <div class="card card-hover" style="text-align:center;">
+            <div style="width:80px;height:80px;border-radius:16px;overflow:hidden;margin:0 auto 12px;border:2px solid var(--border-color);background:var(--bg-tertiary);">
+              ${g.logo ? `<img src="${g.logo}" style="width:100%;height:100%;object-fit:cover;" alt="Logo">` : '<span style="font-size:36px;">🏋️</span>'}
+            </div>
+            <h3 style="margin-bottom:8px;">${escapeHtml(g.nombre)}</h3>
+            <p style="font-size:14px;color:var(--text-secondary);">${escapeHtml(g.ciudad||'')}</p>
+          </div>
+        `;
+      });
+      html += '</div>';
+
+      // Comparison table
+      html += `
+        <div class="table-wrapper mt-3">
+          <table>
+            <thead><tr><th>Categoría</th>${gyms.map(g => `<th>${escapeHtml(g.nombre)}</th>`).join('')}</tr></thead>
+            <tbody>
+              <tr><td><strong>Precio Mensual</strong></td>${gyms.map(g => `<td>$${g.precioMensual||'-'}</td>`).join('')}</tr>
+              <tr><td><strong>Rating</strong></td>${gyms.map(g => `<td>${g.rating||'-'} ★</td>`).join('')}</tr>
+              <tr><td><strong>Especialidades</strong></td>${gyms.map(g => `<td>${(g.especialidades||[]).join(', ')}</td>`).join('')}</tr>
+              <tr><td><strong>Entrenadores</strong></td>${gyms.map(g => `<td>${(g.entrenadores||[]).length} total</td>`).join('')}</tr>
+              <tr><td><strong>Entrenadores Activos</strong></td>${gyms.map(g => `<td>${(g.entrenadores||[]).filter(t=>t.estado==='activo').length} activos</td>`).join('')}</tr>
+              <tr><td><strong>Descripción</strong></td>${gyms.map(g => `<td style="font-size:13px;">${escapeHtml(g.descripcion||'-')}</td>`).join('')}</tr>
+              <tr><td><strong>Dirección</strong></td>${gyms.map(g => `<td style="font-size:13px;">${escapeHtml(g.direccion||'-')}</td>`).join('')}</tr>
+              <tr><td><strong>Entrenadores Destacados</strong></td>${gyms.map(g => `<td>${(g.entrenadoresDestacados||[]).map(t=>escapeHtml(t.nombre)).join(', ')||'-'}</td>`).join('')}</tr>
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      tableContainer.innerHTML = html;
+    }
+
+    function escapeHtml(t) { if (!t) return ''; const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
+    loadGymSelector();
+  </script>
+</body>
+</html>

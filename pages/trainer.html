@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Perfil del Entrenador - GymPlat</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💪</text></svg>">
+</head>
+<body>
+  <div id="navbar-root"></div>
+  <div id="page-content"></div>
+
+  <script type="module">
+    import { Navbar } from '../js/components/Navbar.js';
+    import { TrainerCard } from '../js/components/TrainerCard.js';
+    import { ReviewCard } from '../js/components/ReviewCard.js';
+    import { RatingStars } from '../js/components/RatingStars.js';
+    import { Modal } from '../js/components/Modal.js';
+    import { Toast } from '../js/components/Toast.js';
+    import { FormBuilder } from '../js/components/Form.js';
+    import { trainerService, clientService, photoService, sessionService } from '../js/services/firestore.js';
+    import { getCurrentUser, onAuthStateChanged } from '../js/services/auth.js';
+
+    const toast = new Toast();
+    const modal = new Modal();
+
+    const navbar = new Navbar({ onSearch: (t) => window.location.href = `search.html?q=${encodeURIComponent(t)}` });
+    document.getElementById('navbar-root').appendChild(navbar.render());
+    onAuthStateChanged((user) => navbar.setUser(user));
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const trainerId = urlParams.get('id');
+    let currentTrainer = null;
+    let isOwner = false;
+
+    async function loadTrainerProfile() {
+      const content = document.getElementById('page-content');
+
+      try {
+        currentTrainer = trainerId
+          ? await trainerService.getById(trainerId)
+          : null;
+
+        if (!currentTrainer) {
+          currentTrainer = {
+            id:'demo', nombre:'Carlos García', email:'carlos@gym.es', telefono:'+34 612 345 678',
+            especialidad:'CrossFit', aniosExperiencia:8, bio:'Entrenador certificado con 8 años de experiencia en CrossFit, fuerza y acondicionamiento.',
+            foto:'', certificaciones:['CrossFit L1','ACE Personal Trainer','Primera Aid'],
+            tarifaHora:25, estado:'activo', gymId:'demo', gymNombre:'Power Gym Madrid',
+            createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
+          };
+        }
+
+        const user = getCurrentUser();
+        isOwner = user && (user.id === currentTrainer.ownerId || user.email === currentTrainer.email);
+
+        content.innerHTML = `
+          <div class="page-header">
+            <div style="max-width:600px;margin:0 auto;">
+              <div style="width:120px;height:120px;border-radius:50%;overflow:hidden;margin:0 auto 16px;border:4px solid var(--accent-orange);background:var(--bg-tertiary);">
+                ${currentTrainer.foto
+                  ? `<img src="${currentTrainer.foto}" style="width:100%;height:100%;object-fit:cover;" alt="Foto">`
+                  : '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:56px;">👤</div>'}
+              </div>
+              <h1>${escapeHtml(currentTrainer.nombre)}</h1>
+              <p style="color:var(--text-secondary);">${escapeHtml(currentTrainer.especialidad || '')} · ${currentTrainer.aniosExperiencia || 0} años</p>
+              <div style="display:flex;justify-content:center;gap:12px;margin-top:8px;flex-wrap:wrap;">
+                <span class="badge badge-green">${currentTrainer.estado || 'activo'}</span>
+                <span class="badge badge-blue">💰 $${currentTrainer.tarifaHora || 0}/hora</span>
+                <span class="badge badge-purple">🏢 ${escapeHtml(currentTrainer.gymNombre || 'Sin gimnasio')}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="container mt-3">
+            <div class="tabs">
+              <button class="tab-btn active" data-tab="perfil">👤 Perfil</button>
+              <button class="tab-btn" data-tab="clientes">👥 Clientes ${isOwner?'':'🔒'}</button>
+              <button class="tab-btn" data-tab="agendar">📅 Agendar Sesión</button>
+              <button class="tab-btn" data-tab="progreso">📸 Progreso</button>
+            </div>
+
+            <div id="tab-perfil" class="tab-content active">
+              <div class="grid-2">
+                <div class="card">
+                  <h3 style="margin-bottom:12px;">Bio</h3>
+                  <p>${escapeHtml(currentTrainer.bio || 'Sin bio disponible.')}</p>
+                </div>
+                <div class="card">
+                  <h3 style="margin-bottom:12px;">Certificaciones</h3>
+                  <div class="chip-group">
+                    ${(currentTrainer.certificaciones||[]).map(c => `<span class="chip selected">${escapeHtml(c)}</span>`).join('') || '<span style="color:var(--text-secondary);">Sin certificaciones</span>'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="tab-clientes" class="tab-content ${isOwner?'active':''}">
+              ${isOwner ? '<div id="clients-grid" class="grid-3"></div>' : '<div class="empty-state"><p>🔒 Solo el entrenador puede ver sus clientes</p></div>'}
+            </div>
+
+            <div id="tab-agendar" class="tab-content">
+              <div class="card" style="max-width:500px;">
+                <h3 style="margin-bottom:16px;">📅 Agendar Sesión</h3>
+                <div id="schedule-form"></div>
+              </div>
+            </div>
+
+            <div id="tab-progreso" class="tab-content">
+              <div id="progress-gallery" class="grid-4"></div>
+            </div>
+          </div>
+        `;
+
+        // Tab switching
+        content.querySelectorAll('.tab-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            if (!isOwner && btn.dataset.tab === 'clientes') {
+              toast.warning('Solo el entrenador puede ver sus clientes');
+              return;
+            }
+            content.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            content.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+            btn.classList.add('active');
+            content.querySelector(`#tab-${btn.dataset.tab}`).classList.add('active');
+
+            if (btn.dataset.tab === 'clientes') loadClients();
+            if (btn.dataset.tab === 'agendar') loadScheduleForm();
+            if (btn.dataset.tab === 'progreso') loadProgress();
+          });
+        });
+
+        if (isOwner) loadClients();
+
+        function escapeHtml(t) { if (!t) return ''; const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
+        async function loadClients() {
+          const grid = document.getElementById('clients-grid');
+          if (!grid) return;
+          try {
+            let clients = [];
+            try { clients = await clientService.getByTrainer(currentTrainer.id); } catch(e) {}
+            if (clients.length === 0) {
+              grid.innerHTML = '<div class="empty-state"><div class="icon">👥</div><p>No tienes clientes registrados</p></div>';
+              return;
+            }
+            clients.forEach(c => {
+              const card = document.createElement('div');
+              card.className = 'card card-hover';
+              const estadoClass = c.estado === 'activo' ? 'badge-green' : c.estado === 'vencido' ? 'badge-red' : 'badge-yellow';
+              card.innerHTML = `
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                  <div style="width:48px;height:48px;border-radius:50%;background:var(--gradient-sports);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">${(c.nombre||'?').charAt(0)}</div>
+                  <div>
+                    <h4 style="margin:0;">${escapeHtml(c.nombre)}</h4>
+                    <span class="badge ${estadoClass}" style="font-size:10px;">${c.estado}</span>
+                  </div>
+                </div>
+                <p style="font-size:13px;color:var(--text-secondary);">🎯 ${escapeHtml(c.objetivo||'N/A')}</p>
+                <p style="font-size:13px;color:var(--text-secondary);">📞 ${escapeHtml(c.telefono||'N/A')}</p>
+                <div class="actions-row mt-2">
+                  <button class="btn btn-sm btn-secondary" onclick="toast.info('Editando ${escapeHtml(c.nombre)}')">Editar</button>
+                  <button class="btn btn-sm btn-danger" onclick="toast.info('Eliminar cliente')">Eliminar</button>
+                </div>
+              `;
+              grid.appendChild(card);
+            });
+          } catch(e) {
+            grid.innerHTML = '<div class="empty-state"><p>Error cargando clientes</p></div>';
+          }
+        }
+
+        function loadScheduleForm() {
+          const area = document.getElementById('schedule-form');
+          if (!area) return;
+          let clients = [];
+          try { clients = currentTrainer._demoClients || []; } catch(e) {}
+
+          const form = FormBuilder.create([
+            { name:'clientId', type:'select', label:'Cliente', required:true, options: clients.length > 0 ? clients.map(c=>({value:c.id,label:c.nombre})) : [{value:'',label:'Cargando...'}] },
+            { name:'fecha', type:'date', label:'Fecha', required:true },
+            { name:'hora', type:'time', label:'Hora', required:true },
+            { name:'nota', type:'textarea', label:'Nota (opcional)', placeholder:'Observaciones', rows:2 },
+          ]);
+          area.appendChild(form.render());
+
+          const btn = document.createElement('button');
+          btn.textContent = 'Agendar Sesión';
+          btn.className = 'btn btn-primary mt-2';
+          btn.onclick = async () => {
+            if (!form.validateAll()) return;
+            toast.success('¡Sesión agendada!');
+            form.clear();
+          };
+          area.appendChild(btn);
+        }
+
+        async function loadProgress() {
+          const grid = document.getElementById('progress-gallery');
+          if (!grid) return;
+          try {
+            let photos = [];
+            try { photos = await photoService.getByTrainer(currentTrainer.id); } catch(e) {}
+            if (photos.length === 0) {
+              grid.innerHTML = '<div class="empty-state"><div class="icon">📸</div><p>No hay fotos de progreso</p></div>';
+              return;
+            }
+            photos.forEach(p => {
+              const card = document.createElement('div');
+              card.className = 'card card-hover';
+              card.innerHTML = `
+                <img src="${p.url||''}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;margin-bottom:8px;" alt="Progreso">
+                <span class="badge badge-blue" style="font-size:10px;">${p.tipo||'progreso'}</span>
+                <p style="font-size:13px;margin-top:6px;">${escapeHtml(p.nota||'')}</p>
+                <p style="font-size:12px;color:var(--text-secondary);">📅 ${new Date(p.fecha).toLocaleDateString('es-ES')}</p>
+              `;
+              grid.appendChild(card);
+            });
+          } catch(e) {
+            grid.innerHTML = '<div class="empty-state"><p>Error cargando fotos</p></div>';
+          }
+        }
+      } catch(e) {
+        content.innerHTML = '<div class="container mt-3"><div class="empty-state"><p>Error cargando perfil</p></div></div>';
+        console.error(e);
+      }
+    }
+
+    window.toast = toast;
+    loadTrainerProfile();
+  </script>
+</body>
+</html>

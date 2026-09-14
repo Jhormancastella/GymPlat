@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel Admin - GymPlat</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚙️</text></svg>">
+</head>
+<body>
+  <div id="navbar-root"></div>
+  <div id="page-content"></div>
+
+  <script type="module">
+    import { Navbar } from '../js/components/Navbar.js';
+    import { Toast } from '../js/components/Toast.js';
+    import { Modal } from '../js/components/Modal.js';
+    import { FormBuilder } from '../js/components/Form.js';
+    import { RatingStars } from '../js/components/RatingStars.js';
+    import { COLLECTIONS } from '../js/utils/config.js';
+    import {
+      gymService, trainerService, clientService, reviewService,
+      paymentService, photoService, updateDoc
+    } from '../js/services/firestore.js';
+    import { uploadWithWidget } from '../js/services/cloudinary.js';
+    import { onAuthStateChanged } from '../js/services/auth.js';
+
+    const toast = new Toast();
+    const modal = new Modal();
+    const uploadModal = new Modal();
+
+    const navbar = new Navbar({
+      onSearch: (t) => window.location.href = `search.html?q=${encodeURIComponent(t)}`,
+      onLoginClick: () => { window.location.href = '../index.html'; },
+      onRegisterClick: () => { window.location.href = '../index.html'; },
+    });
+    document.getElementById('navbar-root').appendChild(navbar.render());
+    onAuthStateChanged((user) => navbar.setUser(user));
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const gymId = urlParams.get('gym');
+    let currentGym = null;
+
+    async function loadAdminPanel() {
+      const content = document.getElementById('page-content');
+
+      content.innerHTML = `
+        <div id="navbar-root2"></div>
+        <div class="page-header">
+          <h1>⚙️ Panel de Administración</h1>
+          <p>Gestiona tu gimnasio, entrenadores y clientes</p>
+        </div>
+        <div class="container">
+          <div class="tabs">
+            <button class="tab-btn active" data-tab="dashboard">📊 Dashboard</button>
+            <button class="tab-btn" data-tab="entrenadores">👤 Entrenadores</button>
+            <button class="tab-btn" data-tab="clientes">👥 Clientes</button>
+            <button class="tab-btn" data-tab="reseñas">⭐ Reseñas</button>
+            <button class="tab-btn" data-tab="fotos">📸 Fotos</button>
+            <button class="tab-btn" data-tab="configuracion">⚙️ Configuración</button>
+          </div>
+
+          <div id="tab-dashboard" class="tab-content active">
+            <div class="grid-4 mt-2">
+              <div class="stat-card"><div class="stat-number" id="stat-trainers">0</div><div class="stat-label">Entrenadores</div></div>
+              <div class="stat-card"><div class="stat-number" id="stat-clients">0</div><div class="stat-label">Clientes Activos</div></div>
+              <div class="stat-card"><div class="stat-number" id="stat-revenue">$0</div><div class="stat-label">Ingresos Mes</div></div>
+              <div class="stat-card"><div class="stat-number" id="stat-reviews">0</div><div class="stat-label">Reseñas Pendientes</div></div>
+            </div>
+          </div>
+
+          <div id="tab-entrenadores" class="tab-content">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+              <h2>Gestionar Entrenadores</h2>
+              <button class="btn btn-primary" onclick="openTrainerForm()">➕ Nuevo Entrenador</button>
+            </div>
+            <div id="trainers-admin-list"></div>
+          </div>
+
+          <div id="tab-clientes" class="tab-content">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+              <h2>Gestionar Clientes</h2>
+              <select class="input" id="client-trainer-filter" style="width:auto;" onchange="loadClientsByTrainer()">
+                <option value="">Todos los entrenadores</option>
+              </select>
+            </div>
+            <div id="clients-admin-list"></div>
+          </div>
+
+          <div id="tab-reseñas" class="tab-content">
+            <h2>Reseñas Pendientes</h2>
+            <div id="reviews-admin-list" class="mt-2"></div>
+          </div>
+
+          <div id="tab-fotos" class="tab-content">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+              <h2>Gestionar Fotos del Gimnasio</h2>
+              <button class="btn btn-primary" onclick="openPhotoUpload()">📷 Subir Foto</button>
+            </div>
+            <div class="grid-4" id="photos-admin-list"></div>
+          </div>
+
+          <div id="tab-configuracion" class="tab-content">
+            <h2>Configuración del Gimnasio</h2>
+            <div class="card mt-2" style="max-width:640px;">
+              <div id="config-form"></div>
+              <button class="btn btn-primary mt-2" onclick="saveConfig()">Guardar Cambios</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Tab switching
+      content.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          content.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          content.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+          btn.classList.add('active');
+          content.querySelector(`#tab-${btn.dataset.tab}`).classList.add('active');
+          if (btn.dataset.tab === 'dashboard') loadDashboard();
+          if (btn.dataset.tab === 'entrenadores') loadTrainersAdmin();
+          if (btn.dataset.tab === 'clientes') loadClientsAdmin();
+          if (btn.dataset.tab === 'reseñas') loadReviewsAdmin();
+          if (btn.dataset.tab === 'fotos') loadPhotosAdmin();
+          if (btn.dataset.tab === 'configuracion') loadConfig();
+        });
+      });
+
+      // Load initial data
+      loadDashboard();
+      loadTrainersAdmin();
+
+      function escapeHtml(t) { if (!t) return ''; const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
+      // Dashboard
+      async function loadDashboard() {
+        try {
+          let trainers = [];
+          try { trainers = await trainerService.getByGym(gymId); } catch(e) {}
+          let clients = [];
+          try {
+            const allClients = await clientService.getAll();
+            clients = allClients.filter(c => c.gymId === gymId && c.estado === 'activo');
+          } catch(e) {}
+          let payments = [];
+          try {
+            const allPayments = await paymentService.getAll();
+            const now = new Date();
+            payments = allPayments.filter(p => {
+              if (p.gymId !== gymId) return false;
+              const d = new Date(p.fecha);
+              return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+            });
+          } catch(e) {}
+          let pendingReviews = 0;
+          try {
+            const allReviews = await reviewService.getAll();
+            pendingReviews = allReviews.filter(r => r.gymId === gymId && !r.approved).length;
+          } catch(e) {}
+
+          const revenue = payments.reduce((s, p) => s + (p.monto || 0), 0);
+          document.getElementById('stat-trainers').textContent = trainers.length;
+          document.getElementById('stat-clients').textContent = clients.length;
+          document.getElementById('stat-revenue').textContent = `$${revenue.toLocaleString('es-ES')}`;
+          document.getElementById('stat-reviews').textContent = pendingReviews;
+        } catch(e) {}
+      }
+
+      // Trainers admin
+      async function loadTrainersAdmin() {
+        const list = document.getElementById('trainers-admin-list');
+        if (!list) return;
+        list.innerHTML = '';
+        try {
+          let trainers = [];
+          try { trainers = await trainerService.getByGym(gymId); } catch(e) {}
+          if (trainers.length === 0) {
+            list.innerHTML = '<div class="empty-state"><p>No hay entrenadores</p></div>';
+            return;
+          }
+          trainers.forEach(t => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.cssText = 'display:flex;gap:16px;align-items:center;margin-bottom:12px;';
+            card.innerHTML = `
+              <div style="width:60px;height:60px;border-radius:12px;overflow:hidden;background:var(--bg-tertiary);flex-shrink:0;">
+                ${t.foto ? `<img src="${t.foto}" style="width:100%;height:100%;object-fit:cover;">` : '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:24px;">👤</div>'}
+              </div>
+              <div style="flex:1;">
+                <h4 style="margin:0;">${escapeHtml(t.nombre)}</h4>
+                <p style="font-size:13px;color:var(--text-secondary);margin:2px 0;">${escapeHtml(t.especialidad)} · ${t.aniosExperiencia} años · $${t.tarifaHora}/hr</p>
+                <span class="badge ${t.estado==='activo'?'badge-green':t.estado==='pausa'?'badge-yellow':'badge-red'}">${t.estado}</span>
+              </div>
+              <div class="actions-row">
+                <button class="btn btn-sm btn-secondary" onclick="openTrainerForm('${t.id}')">✏️</button>
+                <button class="btn btn-sm ${t.estado==='activo'?'btn-danger':'btn-success'}" onclick="toggleTrainerState('${t.id}','${t.estado}')">${t.estado==='activo'?'🚫':'✅'}</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteTrainer('${t.id}')">🗑️</button>
+              </div>
+            `;
+            list.appendChild(card);
+          });
+        } catch(e) {
+          list.innerHTML = '<div class="empty-state"><p>Error cargando</p></div>';
+        }
+      }
+
+      // Clients admin
+      async function loadClientsAdmin() {
+        const list = document.getElementById('clients-admin-list');
+        if (!list) return;
+        list.innerHTML = '';
+        try {
+          let allClients = [];
+          try {
+            const c = await clientService.getAll();
+            allClients = c.filter(cl => cl.gymId === gymId);
+          } catch(e) {}
+
+          const filterEl = document.getElementById('client-trainer-filter');
+          if (filterEl) {
+            filterEl.innerHTML = '<option value="">Todos los entrenadores</option>';
+            const trainers = [...new Set(allClients.map(c => c.trainerId))];
+            for (const tid of trainers) {
+              let tName = tid;
+              try { const t = await trainerService.getById(tid); if (t) tName = t.nombre; } catch(e) {}
+              const opt = document.createElement('option');
+              opt.value = tid; opt.textContent = tName;
+              filterEl.appendChild(opt);
+            }
+          }
+
+          const filtered = filterEl?.value
+            ? allClients.filter(c => c.trainerId === filterEl.value)
+            : allClients;
+
+          if (filtered.length === 0) {
+            list.innerHTML = '<div class="empty-state"><p>No hay clientes</p></div>';
+            return;
+          }
+          filtered.forEach(c => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.cssText = 'margin-bottom:12px;';
+            const estadoClass = c.estado === 'activo' ? 'badge-green' : c.estado === 'vencido' ? 'badge-red' : 'badge-yellow';
+            card.innerHTML = `
+              <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+                <div style="width:48px;height:48px;border-radius:50%;background:var(--gradient-sports);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">${(c.nombre||'?').charAt(0)}</div>
+                <div style="flex:1;min-width:200px;">
+                  <h4 style="margin:0;">${escapeHtml(c.nombre)}</h4>
+                  <p style="font-size:13px;color:var(--text-secondary);">${escapeHtml(c.email||'')} · ${escapeHtml(c.telefono||'')}</p>
+                  <p style="font-size:13px;color:var(--text-secondary);">🎯 ${escapeHtml(c.objetivo||'')}</p>
+                </div>
+                <span class="badge ${estadoClass}">${c.estado}</span>
+                <span class="badge badge-blue">${c.periodo||'mensual'}</span>
+                <div class="actions-row">
+                  <button class="btn btn-sm btn-secondary" onclick="openClientForm('${c.id}')">✏️</button>
+                  <button class="btn btn-sm btn-danger" onclick="deleteClient('${c.id}')">🗑️</button>
+                </div>
+              </div>
+            `;
+            list.appendChild(card);
+          });
+        } catch(e) {
+          list.innerHTML = '<div class="empty-state"><p>Error cargando</p></div>';
+        }
+      }
+
+      window.loadClientsByTrainer = loadClientsAdmin;
+
+      // Reviews admin
+      async function loadReviewsAdmin() {
+        const list = document.getElementById('reviews-admin-list');
+        if (!list) return;
+        try {
+          let reviews = [];
+          try {
+            const all = await reviewService.getAll();
+            reviews = all.filter(r => r.gymId === gymId && !r.approved);
+          } catch(e) {}
+          if (reviews.length === 0) {
+            list.innerHTML = '<div class="empty-state"><div class="icon">✅</div><p>¡Todo revisado! No hay reseñas pendientes</p></div>';
+            return;
+          }
+          reviews.forEach(r => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.cssText = 'margin-bottom:12px;';
+            const stars = '★'.repeat(r.rating || 0) + '☆'.repeat(5 - (r.rating || 0));
+            card.innerHTML = `
+              <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:12px;">
+                <div>
+                  <strong>${escapeHtml(r.autorNombre||'Anónimo')}</strong>
+                  <div style="color:#f59e0b;margin:4px 0;">${stars}</div>
+                  <p style="font-size:14px;color:var(--text-primary);">${escapeHtml(r.contenido||'')}</p>
+                </div>
+                <div class="actions-row">
+                  <button class="btn btn-sm btn-success" onclick="approveReview('${r.id}')">✅ Aprobar</button>
+                  <button class="btn btn-sm btn-danger" onclick="rejectReview('${r.id}')">❌ Rechazar</button>
+                </div>
+              </div>
+            `;
+            list.appendChild(card);
+          });
+        } catch(e) {
+          list.innerHTML = '<div class="empty-state"><p>Error cargando</p></div>';
+        }
+      }
+
+      window.approveReview = async function(id) {
+        try { await reviewService.update(id, { approved: true }); toast.success('Reseña aprobada'); loadReviewsAdmin(); }
+        catch(e) { toast.error(e.message); }
+      };
+
+      window.rejectReview = async function(id) {
+        try { await reviewService.delete(id); toast.success('Reseña rechazada'); loadReviewsAdmin(); }
+        catch(e) { toast.error(e.message); }
+      };
+
+      // Photos admin
+      async function loadPhotosAdmin() {
+        const grid = document.getElementById('photos-admin-list');
+        if (!grid) return;
+        try {
+          let photos = [];
+          try {
+            const all = await photoService.getAll();
+            photos = all.filter(p => p.gymId === gymId);
+          } catch(e) {}
+          if (photos.length === 0) {
+            grid.innerHTML = '<div class="empty-state"><div class="icon">📷</div><p>No hay fotos</p></div>';
+            return;
+          }
+          photos.forEach(p => {
+            const card = document.createElement('div');
+            card.className = 'card card-hover';
+            card.style.cssText = 'padding:8px;';
+            card.innerHTML = `
+              <img src="${p.url||''}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;" alt="">
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px 0;">
+                <span class="badge badge-blue" style="font-size:10px;">${p.tipo||''}</span>
+                <button class="btn btn-sm btn-danger" onclick="deletePhoto('${p.id}')">🗑️</button>
+              </div>
+            `;
+            grid.appendChild(card);
+          });
+        } catch(e) {
+          grid.innerHTML = '<div class="empty-state"><p>Error</p></div>';
+        }
+      }
+
+      window.deletePhoto = async function(id) {
+        try { await photoService.delete(id); toast.success('Foto eliminada'); loadPhotosAdmin(); }
+        catch(e) { toast.error(e.message); }
+      };
+
+      // Config form
+      function loadConfig() {
+        const formArea = document.getElementById('config-form');
+        if (!formArea || !currentGym) return;
+        const form = FormBuilder.create([
+          { name:'nombre', type:'text', label:'Nombre del gimnasio', required:true, value:currentGym.nombre },
+          { name:'descripcion', type:'textarea', label:'Descripción', value:currentGym.descripcion, rows:3 },
+          { name:'direccion', type:'text', label:'Dirección', value:currentGym.direccion },
+          { name:'telefono', type:'tel', label:'Teléfono', value:currentGym.telefono },
+          { name:'email', type:'email', label:'Email', value:currentGym.email },
+          { name:'ciudad', type:'text', label:'Ciudad', value:currentGym.ciudad },
+          { name:'precioMensual', type:'number', label:'Precio Mensual ($)', value:currentGym.precioMensual, min:0, step:0.01 },
+        ]);
+        formArea.innerHTML = '';
+        formArea.appendChild(form.render());
+      }
+
+      window.saveConfig = async function() {
+        const formEl = document.getElementById('config-form').querySelector('form');
+        // Manual validation since FormBuilder instance is scoped
+        const inputs = formEl.querySelectorAll('input, textarea');
+        let valid = true;
+        inputs.forEach(inp => {
+          if (inp.required && !inp.value.trim()) {
+            inp.style.borderColor = '#ef4444';
+            valid = false;
+          } else {
+            inp.style.borderColor = '';
+          }
+        });
+        if (!valid) { toast.error('Campos obligatorios incompletos'); return; }
+
+        const data = {};
+        inputs.forEach(inp => { data[inp.name] = inp.value; });
+        data.updatedAt = new Date().toISOString();
+
+        try {
+          await gymService.update(gymId, data);
+          currentGym = { ...currentGym, ...data };
+          toast.success('Configuración guardada');
+        } catch(e) { toast.error(e.message); }
+      };
+
+      // Trainer form (create/edit)
+      window.openTrainerForm = function(editId) {
+        let existing = null;
+        if (editId) {
+          try { existing = trainerService.getById(editId); } catch(e) {}
+        }
+
+        const form = FormBuilder.create([
+          { name:'nombre', type:'text', label:'Nombre', required:true, value:existing?.nombre||'' },
+          { name:'email', type:'email', label:'Email', required:true, value:existing?.email||'' },
+          { name:'telefono', type:'tel', label:'Teléfono', value:existing?.telefono||'' },
+          { name:'especialidad', type:'text', label:'Especialidad', required:true, value:existing?.especialidad||'' },
+          { name:'aniosExperiencia', type:'number', label:'Años de Experiencia', value:existing?.aniosExperiencia||0, min:0 },
+          { name:'certificaciones', type:'text', label:'Certificaciones (separadas por coma)', value:(existing?.certificaciones||[]).join(', ') },
+          { name:'tarifaHora', type:'number', label:'Tarifa/Hora ($)', value:existing?.tarifaHora||0, min:0, step:1 },
+          { name:'bio', type:'textarea', label:'Bio', value:existing?.bio||'', rows:3 },
+          { name:'foto', type:'file', label:'Foto', accept:'image/*' },
+        ]);
+
+        modal.open({
+          title: editId ? 'Editar Entrenador' : 'Nuevo Entrenador',
+          size: 'lg',
+          content: form.render(),
+          actions: [
+            { label: 'Cancelar', className: 'btn btn-ghost', onClick: () => modal.close() },
+            { label: 'Guardar', className: 'btn btn-primary', onClick: async () => {
+              if (!form.validateAll()) return;
+              const vals = form.getValues();
+              try {
+                if (editId) {
+                  const certs = vals.certificaciones ? vals.certificaciones.split(',').map(s=>s.trim()).filter(Boolean) : [];
+                  await trainerService.update(editId, {
+                    nombre:vals.nombre, email:vals.email, telefono:vals.telefono,
+                    especialidad:vals.especialidad, aniosExperiencia:parseInt(vals.aniosExperiencia)||0,
+                    certificaciones:certs, tarifaHora:parseFloat(vals.tarifaHora)||0, bio:vals.bio,
+                    updatedAt:new Date().toISOString(),
+                  });
+                } else {
+                  const certs = vals.certificaciones ? vals.certificaciones.split(',').map(s=>s.trim()).filter(Boolean) : [];
+                  await trainerService.create({
+                    gymId, nombre:vals.nombre, email:vals.email, telefono:vals.telefono,
+                    especialidad:vals.especialidad, aniosExperiencia:parseInt(vals.aniosExperiencia)||0,
+                    certificaciones:certs, tarifaHora:parseFloat(vals.tarifaHora)||0, bio:vals.bio,
+                    estado:'activo',
+                  });
+                }
+                toast.success('Entrenador guardado');
+                modal.close();
+                loadTrainersAdmin();
+              } catch(e) { toast.error(e.message); }
+            }},
+          ],
+        });
+      };
+
+      window.toggleTrainerState = async function(id, state) {
+        try {
+          await trainerService.update(id, { estado: state==='activo'?'inactivo':'activo', updatedAt:new Date().toISOString() });
+          toast.success('Estado actualizado');
+          loadTrainersAdmin();
+        } catch(e) { toast.error(e.message); }
+      };
+
+      window.deleteTrainer = async function(id) {
+        if (confirm('¿Eliminar este entrenador?')) {
+          try { await trainerService.delete(id); toast.success('Eliminado'); loadTrainersAdmin(); }
+          catch(e) { toast.error(e.message); }
+        }
+      };
+
+      window.openClientForm = function(editId) {
+        const form = FormBuilder.create([
+          { name:'nombre', type:'text', label:'Nombre', required:true },
+          { name:'telefono', type:'tel', label:'Teléfono' },
+          { name:'email', type:'email', label:'Email' },
+          { name:'objetivo', type:'text', label:'Objetivo' },
+          { name:'peso', type:'number', label:'Peso (kg)', min:0, step:0.1 },
+          { name:'altura', type:'number', label:'Altura (cm)', min:0 },
+          { name:'nacimiento', type:'date', label:'Fecha de Nacimiento' },
+          { name:'estado', type:'select', label:'Estado', options:[
+            {value:'activo',label:'Activo'},{value:'vencido',label:'Vencido'},{value:'pendiente',label:'Pendiente'},
+          ]},
+          { name:'monto', type:'number', label:'Monto ($)', min:0 },
+          { name:'periodo', type:'select', label:'Periodo', options:[
+            {value:'mensual',label:'Mensual'},{value:'quincenal',label:'Quincenal'},{value:'semanal',label:'Semanal'},
+          ]},
+          { name:'vencimiento', type:'date', label:'Fecha de Vencimiento' },
+          { name:'notas', type:'textarea', label:'Notas', rows:2 },
+        ]);
+
+        modal.open({
+          title: editId ? 'Editar Cliente' : 'Nuevo Cliente',
+          size: 'lg',
+          content: form.render(),
+          actions: [
+            { label: 'Cancelar', className: 'btn btn-ghost', onClick: () => modal.close() },
+            { label: 'Guardar', className: 'btn btn-primary', onClick: async () => {
+              if (!form.validateAll()) return;
+              const vals = form.getValues();
+              try {
+                if (editId) {
+                  await clientService.update(editId, { ...vals, updatedAt: new Date().toISOString() });
+                } else {
+                  await clientService.create({
+                    trainerId: vals.trainerId || '', gymId, ...vals,
+                    fechaInicio: new Date().toISOString(),
+                  });
+                }
+                toast.success('Cliente guardado');
+                modal.close();
+                loadClientsAdmin();
+              } catch(e) { toast.error(e.message); }
+            }},
+          ],
+        });
+      };
+
+      window.deleteClient = async function(id) {
+        if (confirm('¿Eliminar este cliente?')) {
+          try { await clientService.delete(id); toast.success('Eliminado'); loadClientsAdmin(); }
+          catch(e) { toast.error(e.message); }
+        }
+      };
+
+      // Photo upload modal
+      window.openPhotoUpload = function() {
+        const uploadArea = document.createElement('div');
+        uploadArea.innerHTML = `
+          <p style="color:var(--text-secondary);font-size:14px;margin-bottom:16px;">Las fotos se guardan en este navegador.</p>
+          <div id="cloudinary-upload-area"></div>
+          <p id="upload-status" style="margin-top:12px;font-size:14px;color:var(--accent-cyan);"></p>
+        `;
+
+        const btn = document.createElement('button');
+        btn.textContent = '🔵 Subir Imagen';
+        btn.className = 'btn btn-primary';
+        btn.style.cssText = 'margin-top:12px;';
+
+        uploadArea.appendChild(btn);
+
+        modal.open({
+          title: 'Subir Fotos',
+          content: uploadArea,
+          actions: [{ label: 'Cerrar', className: 'btn btn-ghost', onClick: () => modal.close() }],
+        });
+
+        btn.addEventListener('click', async () => {
+          const statusEl = uploadArea.querySelector('#upload-status');
+          try {
+            statusEl.textContent = 'Abriendo selector de imagen...';
+            const result = await uploadWithWidget();
+            statusEl.textContent = 'Imagen guardada localmente';
+            toast.success('Foto guardada');
+
+            // Guardar referencia en Firestore
+            await photoService.create({
+              gymId, trainerId:'', clientId:'', tipo:'mensual',
+              fecha: new Date().toISOString(), peso:null, nota:'Foto del gimnasio',
+              url: result.url, publicId: result.publicId,
+            });
+            loadPhotosAdmin();
+          } catch(e) {
+            statusEl.textContent = `Error: ${e.message}`;
+            toast.error(e.message);
+          }
+        });
+      };
+
+      // Load gym data for admin
+      async function loadGymData() {
+        try {
+          currentGym = await gymService.getById(gymId);
+        } catch(e) {
+          currentGym = { nombre:'Demo Gym', descripcion:'Demo', direccion:'Demo', telefono:'', email:'', ciudad:'Demo', precioMensual:49.99 };
+        }
+      }
+
+      await loadGymData();
+    }
+
+    loadAdminPanel();
+  </script>
+</body>
+</html>
